@@ -1,4 +1,4 @@
-![Design and Development](https://github.com/GugulothBhuvan/GugulothBhuvan/blob/main/portfolioslide.gif)
+![Design and Development]()
 
 # Bhuvan Raj Guguloth
 I'm Bhuvan Raj Guguloth from India, currently pursuing a B.Tech + M.Tech dual degree from the Indian Institute of Technology, Kharagpur. I have a passion for technology and innovation, with a keen interest in software development, design, and problem-solving. I enjoy working on projects that challenge me and allow me to apply my skills in creative ways.
