@@ -10,6 +10,15 @@ PORTRAIT_COLS, PORTRAIT_ROWS = 300, 340
 N_TRAVELLERS = 900
 N_BANDS = 94
 
+# Head + shoulders crop on the 877x877 source, matching the 300:340 grid aspect.
+# The uncropped square left a large dead field of background on the left.
+CROP_BOX = (110, 55, 771, 805)
+
+# Dark mode draws the subject only; light mode keeps the background, so it needs
+# a larger budget or the face goes thin once the background takes its share.
+DARK_TARGET_DOTS = 17000
+LIGHT_TARGET_DOTS = 21000
+
 # Dark Mode Colors
 DARK_BG = "#0A101F"
 DARK_CHROME = "#22D3EE"
@@ -63,53 +72,75 @@ INFO_DETAILS = [
 
 # --- 1. Background Segmentation ---
 def segment_background(img_path):
+    """Isolate the subject.
+
+    The source is a red-monochrome illustration: the lit skin sits at almost the
+    same peach as the backdrop, so a colour-distance threshold cannot separate
+    them (it keeps 96% of the frame and the mask becomes a no-op). What does
+    separate them is structure — the backdrop and its cast shadow are smooth and
+    reach the image border, while the subject is bounded by dark linework that
+    breaks connectivity. So: flat regions that touch the border are background.
+    """
     print("Loading image and segmenting background...")
-    img = Image.open(img_path)
+    img = Image.open(img_path).convert('RGB').crop(CROP_BOX)
     img_resized = img.resize((PORTRAIT_COLS, PORTRAIT_ROWS), Image.Resampling.LANCZOS)
-    data_rgb = np.array(img_resized)
-    data_gray = np.array(img_resized.convert('L'))
+    data_gray = np.array(img_resized.convert('L')).astype(float)
 
-    # Peach background reference color
-    bg_color = np.array([250, 159, 140])
-    dist = np.sqrt(np.sum((data_rgb - bg_color) ** 2, axis=2))
+    # Local standard deviation: low inside flat backdrop, high across linework
+    local_mean = ndimage.uniform_filter(data_gray, size=5)
+    local_sq_mean = ndimage.uniform_filter(data_gray ** 2, size=5)
+    local_std = np.sqrt(np.maximum(0.0, local_sq_mean - local_mean ** 2))
+    smooth = local_std < 3.0
 
-    # Texture calculation using local standard deviation
-    local_mean = ndimage.uniform_filter(data_gray.astype(float), size=5)
-    local_sq_mean = ndimage.uniform_filter(data_gray.astype(float)**2, size=5)
-    local_std = np.sqrt(np.maximum(0.0, local_sq_mean - local_mean**2))
+    # Keep only the sizeable smooth components that touch the border; the size
+    # floor stops a one-pixel leak through the outline from draining the subject
+    labeled, num = ndimage.label(smooth)
+    border_labels = set(labeled[0, :]) | set(labeled[-1, :]) | set(labeled[:, 0]) | set(labeled[:, -1])
+    border_labels.discard(0)
 
-    # Background is flat (low std) AND close to peach color
-    bg_mask = (dist < 45) & (local_std < 1.5)
+    bg_mask = np.zeros_like(smooth)
+    for lab in border_labels:
+        component = labeled == lab
+        if component.sum() > 300:
+            bg_mask |= component
+
     mask = ~bg_mask
 
-    # Morphological clean up
-    mask_closed = ndimage.binary_closing(mask, structure=np.ones((5, 5)))
-    mask_filled = ndimage.binary_fill_holes(mask_closed)
-    
-    labeled, num = ndimage.label(mask_filled)
-    if num > 0:
-        sizes = ndimage.sum(mask_filled, labeled, range(1, num + 1))
-        largest_label = np.argmax(sizes) + 1
-        mask_final = labeled == largest_label
-    else:
-        mask_final = mask_filled
+    # Opening first to shed thin spurs of shadow that cling to the silhouette,
+    # then close and fill so interior highlights stay part of the subject
+    mask = ndimage.binary_opening(mask, structure=np.ones((5, 5)))
+    labeled2, num2 = ndimage.label(mask)
+    if num2 > 0:
+        sizes = ndimage.sum(mask, labeled2, range(1, num2 + 1))
+        mask = labeled2 == (np.argmax(sizes) + 1)
+    mask = ndimage.binary_closing(mask, structure=np.ones((5, 5)))
+    mask_final = ndimage.binary_fill_holes(mask)
 
     # Trim boundaries to prevent edge artifacts
     mask_final[:3, :] = False
     mask_final[:, :3] = False
     mask_final[:, -3:] = False
-    
+
+    print(f"  Subject covers {mask_final.mean() * 100:.1f}% of the frame")
     return img_resized, mask_final
 
 # --- 2. Image Preprocessing & Dithering ---
 def preprocess_image(img):
+    """Return the ink map — how *dark* each pixel is, 0..255.
+
+    A dot is emitted where this is high, so dots follow the drawing's dark
+    linework: hair, eyes, shadow, the folds of the shirt. Keying off brightness
+    instead inverts the portrait — the face becomes a void and the backdrop
+    fills with dots, which is the photo-negative failure to avoid.
+    """
     # Contrast 1.3x
     img_contrast = ImageEnhance.Contrast(img).enhance(1.3)
     # Autocontrast (cutoff=1)
     img_auto = ImageOps.autocontrast(img_contrast, cutoff=1)
     # UnsharpMask (radius=3, percent=140)
     img_sharp = img_auto.filter(ImageFilter.UnsharpMask(radius=3, percent=140, threshold=3))
-    return np.array(img_sharp.convert('L')).astype(float)
+    gray = np.array(img_sharp.convert('L')).astype(float)
+    return 255.0 - gray
 
 def dither_serpentine(gray_img, mask):
     h, w = gray_img.shape
@@ -147,16 +178,16 @@ def dither_serpentine(gray_img, mask):
                     err_buf[y + 1, x + direction] += err * 1/16
     return dithered
 
-def fit_dither_density(gray, mask, target_dots=17000):
-    print("Fitting image intensity to target dot count...")
-    low, high = 0.05, 1.5
+def fit_dither_density(gray, mask, target_dots=17000, label=""):
+    print(f"Fitting {label} intensity to target dot count...")
+    low, high = 0.05, 2.5
     best_factor = 1.0
     best_dither = None
     best_dots = 0
-    
-    for i in range(10):
+
+    for i in range(11):
         factor = (low + high) / 2
-        d = dither_serpentine(gray * factor, mask)
+        d = dither_serpentine(np.clip(gray * factor, 0, 255), mask)
         dots = np.sum(d == 255)
         
         if abs(dots - target_dots) < abs(best_dots - target_dots) or best_dots == 0:
@@ -526,19 +557,32 @@ def write_svg_file(filename, dithered_dots, is_dark):
 if __name__ == "__main__":
     photo_path = 'c:/Users/bhuva/OneDrive/Desktop/4x/New folder/GugulothBhuvan/me_edit.jpeg'
     
+    base = "c:/Users/bhuva/OneDrive/Desktop/4x/New folder/GugulothBhuvan/"
+
     # 1. Segment
     img_resized, mask_final = segment_background(photo_path)
-    
-    # 2. Preprocess
-    gray = preprocess_image(img_resized)
-    
-    # 3. Fit density & dither
-    best_dither, dot_count = fit_dither_density(gray, mask_final, target_dots=17000)
-    
-    # 4. Generate Dark Mode SVG
-    write_svg_file("c:/Users/bhuva/OneDrive/Desktop/4x/New folder/GugulothBhuvan/dark.svg", best_dither, is_dark=True)
-    
-    # 5. Generate Light Mode SVG
-    write_svg_file("c:/Users/bhuva/OneDrive/Desktop/4x/New folder/GugulothBhuvan/light.svg", best_dither, is_dark=False)
-    
+
+    # 2. Preprocess into an ink map (high = dark in the source)
+    ink = preprocess_image(img_resized)
+
+    # 3. Dark mode: background segmented out, dots draw the subject on the panel
+    dark_dither, dark_dots = fit_dither_density(
+        ink, mask_final, target_dots=DARK_TARGET_DOTS, label="dark")
+
+    # 4. Light mode: background kept, dots draw the dark parts of the photo.
+    #    This is a separate render, not a recolour of the dark one.
+    full_frame = np.ones_like(mask_final)
+    light_dither, light_dots = fit_dither_density(
+        ink, full_frame, target_dots=LIGHT_TARGET_DOTS, label="light")
+
+    # 5. Persist the dither arrays — these are the source of truth, not the SVG
+    np.save(base + "dark_dither.npy", dark_dither)
+    np.save(base + "light_dither.npy", light_dither)
+    np.save(base + "subject_mask.npy", mask_final)
+    print("Saved dither arrays to .npy")
+
+    # 6. Emit both banners
+    write_svg_file(base + "dark.svg", dark_dither, is_dark=True)
+    write_svg_file(base + "light.svg", light_dither, is_dark=False)
+
     print("Done! Banners generated successfully.")
