@@ -8,22 +8,17 @@
 
 <!-- GITHUB-STATS -->
 <!--
-  The two cards below point at a SELF-HOSTED github-readme-stats instance.
-  Replace YOUR-INSTANCE.vercel.app with your own Vercel deployment URL.
-  The public instance (github-readme-stats.vercel.app) is shared by thousands
-  of users and returns "API rate limit exceeded" for long stretches of the day.
+  Streak card only. The github-readme-stats cards (stats + top-langs) were
+  dropped: the public instance is shared by thousands and intermittently
+  returns "API rate limit exceeded", and self-hosting them needs a Vercel
+  deployment. To add them back, self-host per the README of
+  anuraghazra/github-readme-stats and drop the two <img> tags in here at
+  width="49%", with hide_rank=true.
 -->
 <div align="center">
 
 <a href="https://github.com/GugulothBhuvan">
   <img width="100%" alt="GitHub Streak" src="https://streak-stats.demolab.com?user=GugulothBhuvan&hide_border=true&background=0A101F&stroke=22D3EE&ring=10B981&fire=A78BFA&currStreakNum=F1F5F9&sideNums=F1F5F9&currStreakLabel=22D3EE&sideLabels=A78BFA&dates=475569" />
-</a>
-
-<a href="https://github.com/GugulothBhuvan">
-  <img width="49%" alt="GitHub Stats" src="https://YOUR-INSTANCE.vercel.app/api?username=GugulothBhuvan&show_icons=true&hide_rank=true&hide_border=true&bg_color=0A101F&title_color=22D3EE&icon_color=A78BFA&text_color=F1F5F9&ring_color=10B981" />
-</a>
-<a href="https://github.com/GugulothBhuvan">
-  <img width="49%" alt="Top Languages" src="https://YOUR-INSTANCE.vercel.app/api/top-langs/?username=GugulothBhuvan&layout=compact&langs_count=8&hide_border=true&bg_color=0A101F&title_color=22D3EE&text_color=F1F5F9" />
 </a>
 
 </div>
